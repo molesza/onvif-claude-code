@@ -1,3 +1,19 @@
 node_modules
 package-lock.json
 .DS_Store
+
+# Configuration files with credentials
+config.yaml
+config-simple.yaml
+config.yaml.backup
+
+# Logs
+*.log
+nohup.out
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
