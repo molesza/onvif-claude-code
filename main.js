@@ -1,6 +1,7 @@
 const tcpProxy = require('node-tcp-proxy');
 const onvifServer = require('./src/onvif-server');
 const configBuilder = require('./src/config-builder');
+const DiscoveryService = require('./src/discovery-service');
 const package = require('./package.json');
 const argparse = require('argparse');
 const readline = require('readline');
@@ -85,18 +86,48 @@ if (args) {
             return -1;
         }
 
+        // Start the master discovery service
+        const discoveryService = new DiscoveryService(logger);
+        logger.info('Starting master discovery service...');
+        
+        // Get the main network interface IP
+        const os = require('os');
+        const networkInterfaces = os.networkInterfaces();
+        let mainInterfaceIp = null;
+        
+        // Find the main interface (enp8s0) IP
+        if (networkInterfaces['enp8s0']) {
+            for (let iface of networkInterfaces['enp8s0']) {
+                if (iface.family === 'IPv4' && !iface.internal) {
+                    mainInterfaceIp = iface.address;
+                    break;
+                }
+            }
+        }
+        
+        logger.info(`Starting discovery on interface: ${mainInterfaceIp || 'all interfaces'}`);
+        discoveryService.start(mainInterfaceIp);
+        logger.info('Master discovery service started!');
+        logger.info('');
+
         let proxies = {};
+        let servers = [];
 
         for (let onvifConfig of config.onvif) {
             let server = onvifServer.createServer(onvifConfig, logger);
             if (server.getHostname()) {
                 logger.info(`Starting virtual onvif server for ${onvifConfig.name} on ${server.getHostname()}:${onvifConfig.ports.server} ...`);
                 server.startServer();
-                server.startDiscovery();
+                
+                // Register with discovery service instead of starting individual discovery
+                server.registerWithDiscovery(discoveryService.getRegistry());
+                
                 if (args.debug)
                     server.enableDebugOutput();
                 logger.info('  Started!');
                 logger.info('');
+
+                servers.push(server);
 
                 if (!proxies[onvifConfig.target.hostname])
                     proxies[onvifConfig.target.hostname] = {}
@@ -119,6 +150,37 @@ if (args) {
                 logger.info('');
             }
         }
+
+        // Handle graceful shutdown
+        process.on('SIGINT', () => {
+            logger.info('');
+            logger.info('Shutting down...');
+            
+            // Unregister all cameras
+            servers.forEach(server => {
+                server.unregisterFromDiscovery();
+            });
+            
+            // Stop discovery service
+            discoveryService.stop();
+            
+            process.exit(0);
+        });
+
+        process.on('SIGTERM', () => {
+            logger.info('');
+            logger.info('Shutting down...');
+            
+            // Unregister all cameras
+            servers.forEach(server => {
+                server.unregisterFromDiscovery();
+            });
+            
+            // Stop discovery service
+            discoveryService.stop();
+            
+            process.exit(0);
+        });
 
     } else {
         logger.error('Please specifiy a config filename!');
